@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HoloVision Ops Center</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a22; --panel2: #0f151c; --line: #223040;
+    --fg: #d7e2ee; --muted: #7a8ba0; --accent: #35d0a5; --accent2: #4aa3ff;
+    --warn: #f0a848; --danger: #ff5f6d; --chip: #1c2733;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel2); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  button { background: var(--chip); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 12px; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); color: #05100c; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { color: #05100c; opacity: .9; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; padding: 14px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted);
+    margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .card .body { padding: 6px 0; max-height: 62vh; overflow: auto; }
+  .row { display: grid; grid-template-columns: 1.1fr 1fr auto; gap: 8px; align-items: center;
+    padding: 9px 14px; border-bottom: 1px solid var(--panel2); cursor: pointer; }
+  .row:hover { background: var(--panel2); }
+  .row.sel { background: #16222e; box-shadow: inset 3px 0 0 var(--accent); }
+  .ip { color: var(--accent2); font-weight: 600; }
+  .host { color: var(--fg); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .pill { display: inline-block; background: var(--chip); border: 1px solid var(--line);
+    border-radius: 20px; padding: 1px 9px; font-size: 11px; color: var(--muted); margin: 2px 3px 0 0; }
+  .pill.on { color: var(--accent); border-color: #244; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; margin-right: 6px; }
+  .dot.slow { background: var(--warn); } .dot.dead { background: var(--muted); }
+  .detail { padding: 14px; }
+  .detail h3 { margin: 0 0 4px; font-size: 16px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; margin: 10px 0; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  .empty { color: var(--muted); padding: 30px 14px; text-align: center; }
+  .spinner { color: var(--accent); }
+  #log { font-size: 12px; color: var(--muted); padding: 8px 14px; border-top: 1px solid var(--line);
+    background: var(--panel2); max-height: 120px; overflow: auto; white-space: pre-wrap; }
+  .tag { font-size: 10px; color: var(--muted); }
+  .grp { padding: 6px 14px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Holo<span>Vision</span> · Ops Center</h1>
+  <div class="meta" id="net-meta">initializing…</div>
+  <div class="toolbar">
+    <button class="primary" id="btn-scan">⟳ Scan subnet</button>
+    <button id="btn-ssdp">SSDP/UPnP</button>
+    <button id="btn-mdns">mDNS</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Devices <span class="tag" id="dev-count"></span></h2>
+    <div class="body" id="devices"><div class="empty">Click <b>Scan subnet</b> to map your LAN.</div></div>
+  </section>
+
+  <section class="card">
+    <h2>Inspector</h2>
+    <div class="body" id="detail"><div class="empty">Select a device to inspect ports, telemetry and controls.</div></div>
+  </section>
+</main>
+
+<div id="log">ready.</div>
+
+<script>
+const TOKEN = "__SESSION_TOKEN__";
+let devices = [], upnp = [], mdns = [], selected = null;
+
+const $ = s => document.querySelector(s);
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+function log(msg) { const l = $("#log"); l.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + l.textContent; }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { const e = await r.json().catch(() => ({error: r.status})); throw new Error(e.error || r.status); }
+  return r.json();
+}
+async function post(path, body) {
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Ops-Token": TOKEN },
+    body: JSON.stringify({ ...body, token: TOKEN }) });
+}
+
+async function init() {
+  try {
+    const info = await api("/api/info");
+    $("#net-meta").textContent = `${info.local_ip} · ${info.subnet} · mDNS ${info.mdns_available ? "on" : "off (pip install zeroconf)"}`;
+    if (!info.mdns_available) $("#btn-mdns").disabled = true;
+  } catch (e) { $("#net-meta").textContent = "offline"; }
+}
+
+function dotClass(rtt) { return rtt == null ? "dead" : rtt > 100 ? "slow" : ""; }
+
+function renderDevices() {
+  const box = $("#devices"); box.innerHTML = "";
+  $("#dev-count").textContent = devices.length ? `${devices.length} up` : "";
+  if (!devices.length) { box.appendChild(el("div", "empty", "No devices found.")); return; }
+  for (const d of devices) {
+    const svc = matchServices(d.ip);
+    const row = el("div", "row" + (selected === d.ip ? " sel" : ""));
+    row.innerHTML =
+      `<div><span class="dot ${dotClass(d.rtt_ms)}"></span><span class="ip">${d.ip}</span>
+         <div class="sub">${d.hostname || "—"}</div></div>
+       <div><div class="host">${d.vendor || "Unknown"}</div>
+         <div class="sub">${d.mac || "no ARP"}</div></div>
+       <div class="sub">${d.rtt_ms == null ? "arp" : d.rtt_ms.toFixed(0) + "ms"}
+         ${svc.length ? `<div>${svc.slice(0,2).map(s=>`<span class="pill on">${s}</span>`).join("")}</div>` : ""}</div>`;
+    row.onclick = () => selectDevice(d);
+    box.appendChild(row);
+  }
+}
+
+function matchServices(ip) {
+  const out = [];
+  for (const u of upnp) if (u.ip === ip && u.friendly_name) out.push(u.friendly_name);
+  for (const m of mdns) if ((m.addresses || []).includes(ip)) out.push(m.type.split(".")[0].replace("_", ""));
+  return [...new Set(out)];
+}
+
+async function selectDevice(d) {
+  selected = d.ip; renderDevices();
+  const box = $("#detail");
+  box.innerHTML = `<div class="detail"><h3>${d.ip}</h3><div class="sub">Scanning ports…</div></div>`;
+  const renderers = upnp.filter(u => u.ip === d.ip &&
+    (u.services || []).some(s => (s.type || "").includes("AVTransport")));
+  let ports = [];
+  try { ports = (await api("/api/ports?host=" + encodeURIComponent(d.ip))).open; }
+  catch (e) { log("port scan failed: " + e.message); }
+
+  const detail = el("div", "detail");
+  detail.innerHTML = `<h3>${d.hostname || d.vendor || d.ip}</h3><div class="sub">${d.ip}</div>
+    <div class="kv">
+      <div>MAC</div><div>${d.mac || "—"}</div>
+      <div>Vendor</div><div>${d.vendor || "Unknown"}</div>
+      <div>Latency</div><div>${d.rtt_ms == null ? "no ICMP (ARP only)" : d.rtt_ms.toFixed(1) + " ms"}</div>
+      <div>Open ports</div><div>${ports.length ? ports.map(p=>`<span class="pill on">${p.port} ${p.service}</span>`).join("") : "none in common set"}</div>
+    </div>`;
+
+  // Actions
+  const actions = el("div", "actions");
+  if (d.mac) {
+    const wol = el("button", "", "⏻ Wake-on-LAN");
+    wol.onclick = async () => {
+      try { await post("/api/wol", { mac: d.mac }); log(`WoL magic packet sent to ${d.mac}`); }
+      catch (e) { log("WoL failed: " + e.message); }
+    };
+    actions.appendChild(wol);
+  }
+  const rescan = el("button", "", "⟳ Re-scan ports");
+  rescan.onclick = () => selectDevice(d);
+  actions.appendChild(rescan);
+  detail.appendChild(actions);
+
+  // Media renderers on this IP
+  for (const r of renderers) {
+    const svc = r.services.find(s => (s.type || "").includes("AVTransport"));
+    const rc = r.services.find(s => (s.type || "").includes("RenderingControl"));
+    detail.appendChild(el("div", "grp", `Media · ${r.friendly_name || r.model || "UPnP renderer"}`));
+    const mrow = el("div", "actions");
+    const mk = (label, command, ctrl, value) => {
+      const b = el("button", "", label);
+      b.onclick = async () => {
+        try { await post("/api/media", { location: r.location, control_url: ctrl, command, value });
+          log(`${command} → ${r.friendly_name || r.ip}`); }
+        catch (e) { log("media failed: " + e.message); }
+      };
+      return b;
+    };
+    mrow.append(
+      mk("▶ Play", "play", svc.control_url),
+      mk("⏸ Pause", "pause", svc.control_url),
+      mk("⏹ Stop", "stop", svc.control_url),
+    );
+    if (rc) mrow.append(
+      mk("🔉 Vol 20", "setvolume", rc.control_url, "20"),
+      mk("🔊 Vol 60", "setvolume", rc.control_url, "60"),
+      mk("🔇 Mute", "mute", rc.control_url),
+    );
+    detail.appendChild(mrow);
+  }
+  box.innerHTML = ""; box.appendChild(detail);
+}
+
+async function busy(btn, fn) {
+  const t = btn.textContent; btn.disabled = true; btn.textContent = "…working";
+  try { await fn(); } catch (e) { log("error: " + e.message); }
+  finally { btn.disabled = false; btn.textContent = t; }
+}
+
+$("#btn-scan").onclick = e => busy(e.target, async () => {
+  log("scanning subnet…");
+  devices = (await api("/api/scan")).devices; renderDevices();
+  log(`found ${devices.length} host(s).`);
+});
+$("#btn-ssdp").onclick = e => busy(e.target, async () => {
+  log("SSDP discovery…");
+  upnp = (await api("/api/ssdp")).devices;
+  log(`SSDP: ${upnp.length} UPnP device(s).`); renderDevices();
+});
+$("#btn-mdns").onclick = e => busy(e.target, async () => {
+  log("mDNS browse…");
+  const r = await api("/api/mdns"); mdns = r.services || [];
+  log(`mDNS: ${mdns.length} service(s).`); renderDevices();
+});
+
+init();
+</script>
+</body>
+</html>

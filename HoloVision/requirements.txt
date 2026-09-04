@@ -1,0 +1,4 @@
+# HoloVision Ops Center runs on the Python 3.9+ standard library alone.
+# The only optional dependency enables mDNS / Bonjour discovery
+# (Chromecast, AirPlay, HomeKit, Sonos, printers, etc.).
+zeroconf>=0.131 ; python_version >= "3.9"
