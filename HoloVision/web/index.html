@@ -85,6 +85,21 @@
   button.mini:hover { color: var(--accent); }
   .filter { display: inline-block; width: auto; max-width: 160px; float: right; margin-top: -4px; padding: 3px 8px; font-size: 12px; }
   .grp .tag { color: var(--accent); }
+  /* Hub bar */
+  .hub-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg, #16222e, var(--panel2)); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .hub-info { flex: 1; min-width: 220px; }
+  .hub-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .hub-sub { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 60ch; }
+  .hub-sub b { color: var(--accent); font-weight: 600; }
+  .hub-actions { display: flex; gap: 8px; }
+  button.big { font-size: 13px; padding: 10px 16px; }
+  #hub-state.on { color: var(--accent); }
+  .advanced { margin-bottom: 4px; }
+  .advanced summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 6px 0; }
+  .advanced summary:hover { color: var(--accent); }
+  .advanced .mqtt-conn { margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -113,6 +128,18 @@
 <section class="card mqtt">
   <h2>MQTT Smart-Home Control <span class="tag" id="mqtt-state">disconnected</span></h2>
   <div class="mqtt-body">
+    <div class="hub-bar" id="hub-bar">
+      <div class="hub-info">
+        <div class="hub-title">🏠 Smart-Home Hub <span class="tag" id="hub-state">stopped</span></div>
+        <div class="hub-sub" id="hub-sub">The hub is a local “post office” your devices connect to. Start it once — no install, runs inside this app.</div>
+      </div>
+      <div class="hub-actions">
+        <button class="primary big" id="hub-start">▶ Start Hub &amp; Connect</button>
+        <button id="hub-stop" hidden>■ Stop Hub</button>
+      </div>
+    </div>
+    <details class="advanced">
+      <summary>Connect to a different broker (advanced)</summary>
     <div class="mqtt-conn">
       <div class="field"><label>Broker host</label><input id="m-host" placeholder="192.168.1.10 / localhost" /></div>
       <div class="field sm"><label>Port</label><input id="m-port" value="1883" /></div>
@@ -124,6 +151,7 @@
         <button id="m-disconnect" disabled>Disconnect</button>
       </div>
     </div>
+    </details>
 
     <div class="mqtt-cols">
       <div class="mqtt-feed">
@@ -171,6 +199,7 @@ async function post(path, body) {
 async function init() {
   try {
     const info = await api("/api/info");
+    localIp = info.local_ip;
     $("#net-meta").textContent = `${info.local_ip} · ${info.subnet} · mDNS ${info.mdns_available ? "on" : "off (pip install zeroconf)"}`;
     if (!info.mdns_available) $("#btn-mdns").disabled = true;
   } catch (e) { $("#net-meta").textContent = "offline"; }
@@ -370,9 +399,54 @@ $("#p-send").onclick = e => busy(e.target, async () => {
 });
 $("#m-clear").onclick = () => { $("#m-messages").innerHTML = '<div class="empty">cleared.</div>'; };
 
+// ---- Bundled hub (broker) -------------------------------------------- //
+let localIp = null, hubPoll = null;
+
+function renderHub(s) {
+  const on = s && s.running;
+  $("#hub-state").textContent = on ? "running" : "stopped";
+  $("#hub-state").className = "tag" + (on ? " on" : "");
+  $("#hub-start").hidden = on; $("#hub-stop").hidden = !on;
+  if (on) {
+    const n = s.client_count || 0;
+    const addr = localIp ? `<b>${localIp}:${s.port}</b>` : `<b>this computer, port ${s.port}</b>`;
+    $("#hub-sub").innerHTML =
+      `Hub is running. Point your smart-home devices (Tasmota, ESPHome, Zigbee2MQTT…) at ${addr}. ` +
+      `${n} device${n === 1 ? "" : "s"} connected · ${s.messages_routed || 0} messages routed.`;
+  } else {
+    $("#hub-sub").innerHTML =
+      'The hub is a local “post office” your devices connect to. Start it once — no install, runs inside this app.';
+  }
+}
+
+async function pollHub() {
+  try { renderHub(await api("/api/hub/status")); } catch (e) {}
+}
+
+$("#hub-start").onclick = e => busy(e.target, async () => {
+  log("starting bundled hub…");
+  const s = await post("/api/hub/start", {});
+  renderHub(s);
+  log(`hub running on port ${s.port}`);
+  // Auto-connect the client to the local hub and watch everything.
+  const r = await post("/api/mqtt/connect", { host: "127.0.0.1", port: s.port, topic: "#" });
+  setMqttConnected(true); mqttSeq = 0; $("#m-messages").innerHTML = "";
+  $("#m-host").value = "127.0.0.1"; $("#m-port").value = s.port; $("#m-topic").value = "#";
+  log("connected to hub · watching all topics (#)");
+  startMqtt();
+  if (!hubPoll) hubPoll = setInterval(pollHub, 3000);
+});
+$("#hub-stop").onclick = e => busy(e.target, async () => {
+  stopMqtt(); try { await post("/api/mqtt/disconnect", {}); } catch (e) {}
+  setMqttConnected(false);
+  renderHub(await post("/api/hub/stop", {}));
+  if (hubPoll) { clearInterval(hubPoll); hubPoll = null; }
+  log("hub stopped");
+});
+
 renderPresets();
 setMqttConnected(false);
-init();
+init().then(pollHub);
 </script>
 </body>
 </html>

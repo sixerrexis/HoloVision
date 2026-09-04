@@ -70,22 +70,31 @@ Double-clicking starts the local server and opens `http://127.0.0.1:8787`.
 | Service discovery | mDNS / Bonjour | Optional (`zeroconf`): Cast, AirPlay, HomeKit, Sonos, printers |
 | Power control | Wake-on-LAN | Magic packet to a device's MAC |
 | Media control | UPnP AVTransport / RenderingControl | Play / Pause / Stop / Next / Prev, volume, mute on TVs, speakers, DLNA renderers |
-| Smart-home control | **MQTT 3.1.1** (built-in client) | Connect to a local broker, watch live device telemetry, publish control commands. No cloud, no `pip install` |
+| Smart-home hub | **MQTT 3.1.1** (built-in broker) | One-click bundled broker — your devices' "post office". No install, no admin |
+| Smart-home control | **MQTT 3.1.1** (built-in client) | Watch live device telemetry, publish control commands. No cloud, no `pip install` |
 
-## Using the MQTT smart-home panel
+## Smart-home (MQTT) — start here
 
-The panel talks to a **local MQTT broker** — the hub most DIY smart-home stacks
-already run (Mosquitto, Home Assistant's built-in broker, Zigbee2MQTT, Tasmota,
-ESPHome). Everything stays on your LAN.
+### What's a broker (a.k.a. the "hub")?
 
-1. **Point it at your broker.** In the *MQTT Smart-Home Control* panel, enter the
-   broker **host** (e.g. your Home Assistant IP or `localhost`) and **port**
-   (`1883` plain, or your TLS-terminated port). Add **username/password** only if
-   your broker requires them. Click **Connect** — the badge turns *connected*.
-2. **Watch telemetry.** Set the **Subscribe topic** to `#` to see everything, or
-   scope it (`zigbee2mqtt/#`, `homeassistant/#`, `tasmota/#`). The **Live feed**
-   streams messages as devices report state; use the **filter** box to narrow by
-   topic.
+A **broker** is a **post office for your smart-home devices**. Devices don't talk
+to each other directly — each one drops off messages ("I'm a lamp, I just turned
+ON") and subscribes to the mail it cares about ("tell me when someone sends a
+command to `lamp/set`"). The broker sits in the middle and delivers each message
+to whoever asked for it. **Nothing works until a broker is running.**
+
+HoloVision **bundles its own broker** so you don't have to install anything.
+
+### One-click setup
+
+1. In the **MQTT Smart-Home Control** panel, click **▶ Start Hub & Connect**.
+   That starts the bundled broker *and* connects the panel to it, watching all
+   topics (`#`). The badge turns *running / connected*.
+2. **Point your devices at the hub.** The panel shows the address to use — your
+   computer's LAN IP and port `1883` (e.g. `192.168.1.20:1883`). In each device's
+   settings (Tasmota, ESPHome, Zigbee2MQTT, a Home-Assistant MQTT integration),
+   set the MQTT broker/host to that address. They'll appear in the **Live feed**
+   as they connect and report state.
 3. **Send a command.** Find a device's *set* topic in the feed, then use the
    **Publish** box — Topic + Payload. Examples:
    - Zigbee2MQTT light on → topic `zigbee2mqtt/Living Room Lamp/set`,
@@ -97,9 +106,16 @@ ESPHome). Everything stays on your LAN.
    `DEVICE` with your device's actual name. Tick **retain** for state the broker
    should remember across reconnects (use sparingly).
 
-> **Tip:** if you don't know a device's command topic, watch the feed while you
-> toggle the device in its own app — its status topic reveals the naming, and the
-> `/set` (or `cmnd/…`) variant is what you publish to.
+> **Tip:** don't know a device's command topic? Watch the feed while you toggle
+> the device in its own app — its status topic reveals the naming, and the `/set`
+> (or `cmnd/…`) variant is what you publish to.
+
+### Already have a broker?
+
+If you run Mosquitto or Home Assistant's broker, skip the hub: expand **Connect to
+a different broker (advanced)**, enter its host/port (and username/password if
+needed), and Connect. The bundled hub is the zero-setup option; Mosquitto is the
+natural upgrade once you want persistence, TLS, and access control.
 
 ## Security model
 
@@ -109,6 +125,12 @@ ESPHome). Everything stays on your LAN.
 - **Host-header allow-list** rejects DNS-rebinding attempts.
 - Do **not** pass `--host 0.0.0.0` unless you add your own auth; this tool is
   designed for a single trusted machine on a network you own.
+- The **bundled hub (broker)** listens on `0.0.0.0:1883` **on purpose** — your
+  smart-home devices, which live elsewhere on the LAN, must be able to reach it
+  (a loopback-only broker no device could connect to would be useless). It is an
+  open, unauthenticated broker, so run it only on a home/trusted network. For an
+  untrusted network, use Mosquitto with a username/password and TLS instead, and
+  point the panel at it via the *advanced* connect form.
 - Only scan and control devices on networks you are authorized to operate.
 
 ## Architecture
@@ -120,7 +142,8 @@ HoloVision/
 │   ├── net.py             # local IP/subnet, ARP table, MAC-vendor, reverse-DNS
 │   ├── discovery.py       # ping sweep, TCP port scan, SSDP/UPnP, mDNS
 │   ├── control.py         # Wake-on-LAN, UPnP AV media commands (SOAP)
-│   └── mqtt.py            # dependency-free MQTT 3.1.1 client + broker session
+│   ├── mqtt.py            # dependency-free MQTT 3.1.1 client + broker session
+│   └── broker.py          # bundled MQTT broker ("the hub"): pub/sub, wildcards, retained
 ├── web/index.html         # self-contained dashboard UI (no external assets)
 ├── make_shortcut.py       # create/remove the desktop shortcut (Linux/macOS/Win)
 └── requirements.txt       # optional: zeroconf for mDNS
@@ -143,6 +166,9 @@ HoloVision/
 | POST | `/api/mqtt/disconnect` | close broker session (token required) |
 | GET | `/api/mqtt/messages?since=` | poll live feed since a sequence number |
 | GET | `/api/mqtt/status` | broker connection status |
+| POST | `/api/hub/start` | `{host?, port?}` → start the bundled broker (token required) |
+| POST | `/api/hub/stop` | stop the bundled broker (token required) |
+| GET | `/api/hub/status` | bundled-broker status: clients, retained, messages routed |
 
 ## Roadmap (natural next protocols to add — all local-first)
 

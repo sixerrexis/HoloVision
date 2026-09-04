@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 from opscenter import __version__, control, discovery, net
 from opscenter import mqtt as mqtt_mod
+from opscenter import broker as broker_mod
 
 WEB_DIR = pathlib.Path(__file__).parent / "web"
 # Per-run token: pages from other origins can reach 127.0.0.1, so control
@@ -31,6 +32,8 @@ SESSION_TOKEN = secrets.token_urlsafe(24)
 
 # Process-wide MQTT session (a broker connection outlives any one request).
 MQTT = mqtt_mod.Session()
+# Bundled MQTT broker ("the hub") — one click to run a local post office.
+HUB = broker_mod.BrokerManager()
 
 
 class OpsHandler(BaseHTTPRequestHandler):
@@ -133,6 +136,9 @@ class OpsHandler(BaseHTTPRequestHandler):
         if path == "/api/mqtt/status":
             self._send_json(MQTT.status())
             return
+        if path == "/api/hub/status":
+            self._send_json(HUB.status())
+            return
         self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -179,6 +185,13 @@ class OpsHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/mqtt/disconnect":
                 self._send_json(MQTT.disconnect())
+                return
+            if path == "/api/hub/start":
+                self._send_json(HUB.start(
+                    body.get("host", "0.0.0.0"), body.get("port", 1883)))
+                return
+            if path == "/api/hub/stop":
+                self._send_json(HUB.stop())
                 return
         except (KeyError, ValueError) as exc:
             self._send_json({"error": str(exc)}, 400)
