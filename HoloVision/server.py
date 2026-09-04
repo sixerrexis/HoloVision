@@ -22,11 +22,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from opscenter import __version__, control, discovery, net
+from opscenter import mqtt as mqtt_mod
 
 WEB_DIR = pathlib.Path(__file__).parent / "web"
 # Per-run token: pages from other origins can reach 127.0.0.1, so control
 # actions (POST) require this token, handed to our own UI at page load.
 SESSION_TOKEN = secrets.token_urlsafe(24)
+
+# Process-wide MQTT session (a broker connection outlives any one request).
+MQTT = mqtt_mod.Session()
 
 
 class OpsHandler(BaseHTTPRequestHandler):
@@ -122,6 +126,13 @@ class OpsHandler(BaseHTTPRequestHandler):
                  "services": discovery.mdns_discover()}
             )
             return
+        if path == "/api/mqtt/messages":
+            since = int(q.get("since", ["0"])[0] or 0)
+            self._send_json(MQTT.messages(since))
+            return
+        if path == "/api/mqtt/status":
+            self._send_json(MQTT.status())
+            return
         self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -150,10 +161,29 @@ class OpsHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "response": result[:2000]})
                 return
+            if path == "/api/mqtt/connect":
+                self._send_json(MQTT.connect(
+                    body["host"], body.get("port", 1883),
+                    body.get("username") or None, body.get("password") or None,
+                    body.get("topic") or None,
+                ))
+                return
+            if path == "/api/mqtt/subscribe":
+                self._send_json(MQTT.subscribe(body["topic"]))
+                return
+            if path == "/api/mqtt/publish":
+                self._send_json(MQTT.publish(
+                    body["topic"], body.get("payload", ""),
+                    bool(body.get("retain", False)),
+                ))
+                return
+            if path == "/api/mqtt/disconnect":
+                self._send_json(MQTT.disconnect())
+                return
         except (KeyError, ValueError) as exc:
             self._send_json({"error": str(exc)}, 400)
             return
-        except OSError as exc:
+        except (OSError, ConnectionError) as exc:
             self._send_json({"error": f"network error: {exc}"}, 502)
             return
         self._send_json({"error": "not found"}, 404)

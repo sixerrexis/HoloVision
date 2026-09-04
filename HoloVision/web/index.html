@@ -54,6 +54,37 @@
     background: var(--panel2); max-height: 120px; overflow: auto; white-space: pre-wrap; }
   .tag { font-size: 10px; color: var(--muted); }
   .grp { padding: 6px 14px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  /* MQTT panel */
+  .mqtt { margin: 0 14px 14px; }
+  .mqtt-body { padding: 12px 14px 16px; }
+  .mqtt-conn { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.sm { max-width: 90px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .field .opt { text-transform: none; letter-spacing: 0; color: #566; }
+  input, textarea { background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+    border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 13px; width: 100%; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { resize: vertical; }
+  .field.btns, .field.row2 { flex-direction: row; gap: 8px; align-items: center; }
+  .chk { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .chk input { width: auto; }
+  .mqtt-cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; margin-top: 14px; }
+  @media (max-width: 900px) { .mqtt-cols { grid-template-columns: 1fr; } }
+  .feed { border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
+    height: 300px; overflow: auto; padding: 4px 0; }
+  .msg { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 6px 12px; border-bottom: 1px solid #0e141b; }
+  .msg .t { color: var(--accent2); word-break: break-all; }
+  .msg .time { color: #566; font-size: 11px; }
+  .msg .p { grid-column: 1 / -1; color: var(--fg); white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 0; }
+  .preset { background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px;
+    font-size: 11px; cursor: pointer; color: var(--muted); }
+  .preset:hover { border-color: var(--accent); color: var(--accent); }
+  button.mini { background: none; border: none; color: var(--muted); font-size: 11px; padding: 0 6px; cursor: pointer; }
+  button.mini:hover { color: var(--accent); }
+  .filter { display: inline-block; width: auto; max-width: 160px; float: right; margin-top: -4px; padding: 3px 8px; font-size: 12px; }
+  .grp .tag { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -78,6 +109,44 @@
     <div class="body" id="detail"><div class="empty">Select a device to inspect ports, telemetry and controls.</div></div>
   </section>
 </main>
+
+<section class="card mqtt">
+  <h2>MQTT Smart-Home Control <span class="tag" id="mqtt-state">disconnected</span></h2>
+  <div class="mqtt-body">
+    <div class="mqtt-conn">
+      <div class="field"><label>Broker host</label><input id="m-host" placeholder="192.168.1.10 / localhost" /></div>
+      <div class="field sm"><label>Port</label><input id="m-port" value="1883" /></div>
+      <div class="field"><label>Username <span class="opt">(optional)</span></label><input id="m-user" placeholder="" /></div>
+      <div class="field"><label>Password <span class="opt">(optional)</span></label><input id="m-pass" type="password" placeholder="" /></div>
+      <div class="field"><label>Subscribe topic(s)</label><input id="m-topic" value="#" placeholder="# or homeassistant/# , zigbee2mqtt/#" /></div>
+      <div class="field btns">
+        <button class="primary" id="m-connect">Connect</button>
+        <button id="m-disconnect" disabled>Disconnect</button>
+      </div>
+    </div>
+
+    <div class="mqtt-cols">
+      <div class="mqtt-feed">
+        <div class="grp">Live feed <span class="tag" id="m-count"></span>
+          <button class="mini" id="m-clear" title="clear feed">clear</button>
+          <input id="m-filter" class="filter" placeholder="filter topic…" />
+        </div>
+        <div id="m-messages" class="feed"><div class="empty">Connect to a broker to watch device telemetry.</div></div>
+      </div>
+      <div class="mqtt-publish">
+        <div class="grp">Publish command</div>
+        <div class="field"><label>Topic</label><input id="p-topic" placeholder="zigbee2mqtt/Living Room Light/set" /></div>
+        <div class="field"><label>Payload</label><textarea id="p-payload" rows="3" placeholder='{"state":"ON"}'></textarea></div>
+        <div class="field row2">
+          <label class="chk"><input type="checkbox" id="p-retain" /> retain</label>
+          <button class="primary" id="p-send" disabled>Publish</button>
+        </div>
+        <div class="grp">Quick presets <span class="opt">click to fill</span></div>
+        <div id="presets" class="presets"></div>
+      </div>
+    </div>
+  </div>
+</section>
 
 <div id="log">ready.</div>
 
@@ -221,6 +290,88 @@ $("#btn-mdns").onclick = e => busy(e.target, async () => {
   log(`mDNS: ${mdns.length} service(s).`); renderDevices();
 });
 
+// ---- MQTT smart-home panel ------------------------------------------- //
+const PRESETS = [
+  { label: "Zigbee2MQTT · light ON", topic: "zigbee2mqtt/FRIENDLY_NAME/set", payload: '{"state":"ON"}' },
+  { label: "Zigbee2MQTT · light OFF", topic: "zigbee2mqtt/FRIENDLY_NAME/set", payload: '{"state":"OFF"}' },
+  { label: "Zigbee2MQTT · dim 50%", topic: "zigbee2mqtt/FRIENDLY_NAME/set", payload: '{"brightness":128}' },
+  { label: "Tasmota · power ON", topic: "cmnd/tasmota_device/POWER", payload: "ON" },
+  { label: "Tasmota · power OFF", topic: "cmnd/tasmota_device/POWER", payload: "OFF" },
+  { label: "Home Assistant · switch", topic: "homeassistant/switch/ID/set", payload: "ON" },
+  { label: "ESPHome · relay", topic: "esphome/DEVICE/switch/relay/command", payload: "ON" },
+];
+let mqttSeq = 0, mqttPoll = null, feedPaused = false;
+
+function renderPresets() {
+  const box = $("#presets"); box.innerHTML = "";
+  for (const p of PRESETS) {
+    const b = el("button", "preset", p.label);
+    b.onclick = () => { $("#p-topic").value = p.topic; $("#p-payload").value = p.payload; };
+    box.appendChild(b);
+  }
+}
+
+function setMqttConnected(on) {
+  $("#m-connect").disabled = on; $("#m-disconnect").disabled = !on;
+  $("#p-send").disabled = !on;
+  $("#mqtt-state").textContent = on ? "connected" : "disconnected";
+  $("#mqtt-state").style.color = on ? "var(--accent)" : "var(--muted)";
+}
+
+function appendMsg(m) {
+  const filt = $("#m-filter").value.trim().toLowerCase();
+  if (filt && !m.topic.toLowerCase().includes(filt)) return;
+  const feed = $("#m-messages");
+  if (feed.querySelector(".empty")) feed.innerHTML = "";
+  const row = el("div", "msg");
+  const time = new Date(m.ts * 1000).toLocaleTimeString();
+  row.innerHTML = `<div class="t">${m.topic}</div><div class="time">${time} · ${m.bytes}B</div>
+    <div class="p">${(m.payload || "").slice(0, 800).replace(/</g, "&lt;")}</div>`;
+  feed.prepend(row);
+  while (feed.children.length > 300) feed.removeChild(feed.lastChild);
+  $("#m-count").textContent = "";
+}
+
+async function pollMqtt() {
+  try {
+    const r = await api("/api/mqtt/messages?since=" + mqttSeq);
+    if (r.status !== "connected" && r.status !== "disconnected") {
+      log("MQTT " + r.status + (r.error ? ": " + r.error : ""));
+    }
+    if (r.status === "error") { stopMqtt(); setMqttConnected(false); return; }
+    for (const m of r.messages) appendMsg(m);
+    if (r.last_seq) mqttSeq = r.last_seq;
+  } catch (e) { /* transient */ }
+}
+function startMqtt() { stopMqtt(); mqttPoll = setInterval(pollMqtt, 1000); }
+function stopMqtt() { if (mqttPoll) { clearInterval(mqttPoll); mqttPoll = null; } }
+
+$("#m-connect").onclick = e => busy(e.target, async () => {
+  const host = $("#m-host").value.trim();
+  if (!host) { log("MQTT: broker host required"); return; }
+  const r = await post("/api/mqtt/connect", {
+    host, port: parseInt($("#m-port").value || "1883", 10),
+    username: $("#m-user").value.trim(), password: $("#m-pass").value,
+    topic: $("#m-topic").value.trim(),
+  });
+  setMqttConnected(true); mqttSeq = 0; $("#m-messages").innerHTML = "";
+  log(`MQTT connected to ${host} · subscribed: ${(r.subscriptions||[]).join(", ") || "(none)"}`);
+  startMqtt();
+});
+$("#m-disconnect").onclick = async () => {
+  stopMqtt(); try { await post("/api/mqtt/disconnect", {}); } catch (e) {}
+  setMqttConnected(false); log("MQTT disconnected");
+};
+$("#p-send").onclick = e => busy(e.target, async () => {
+  const topic = $("#p-topic").value.trim();
+  if (!topic) { log("MQTT: publish topic required"); return; }
+  await post("/api/mqtt/publish", { topic, payload: $("#p-payload").value, retain: $("#p-retain").checked });
+  log(`MQTT published → ${topic}`);
+});
+$("#m-clear").onclick = () => { $("#m-messages").innerHTML = '<div class="empty">cleared.</div>'; };
+
+renderPresets();
+setMqttConnected(false);
 init();
 </script>
 </body>
